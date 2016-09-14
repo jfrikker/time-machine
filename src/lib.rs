@@ -1,3 +1,5 @@
+use std::collections::vec_deque::VecDeque;
+
 pub trait TimeMachineState<F, R> {
     fn apply_forward(&mut self, delta: F) -> R;
     fn apply_reverse(&mut self, delta: R) -> F;
@@ -7,7 +9,7 @@ struct Timestamped<T, D> (T, D);
 
 pub struct TimeMachine<S, F, R, T> {
     current: S,
-    reverse: Vec<Timestamped<T, R>>,
+    reverse: VecDeque<Timestamped<T, R>>,
     forward: Vec<Timestamped<T, F>>
 }
 
@@ -17,7 +19,7 @@ impl <S, F, R, T> TimeMachine<S, F, R, T>
     pub fn new(initial: S) -> TimeMachine<S, F, R, T> {
         TimeMachine {
             current: initial,
-            reverse: Vec::new(),
+            reverse: VecDeque::new(),
             forward: Vec::new()
         }
     }
@@ -32,12 +34,32 @@ impl <S, F, R, T> TimeMachine<S, F, R, T>
         &self.current
     }
 
-    fn move_to(&mut self, at: T) {
+    pub fn forget_ancient_history(&mut self, until: T) {
+        self.move_forward_to(until);
+
         loop {
-            match self.reverse.pop() {
+            match self.reverse.pop_front() {
+                Some(Timestamped(time, delta)) =>
+                    if time >= until {
+                        self.reverse.push_front(Timestamped(time, delta));
+                        break;
+                    },
+                None => break
+            }
+        }
+    }
+
+    fn move_to(&mut self, at: T) {
+        self.move_forward_to(at);
+        self.move_backward_to(at);
+    }
+
+    fn move_backward_to(&mut self, at: T) {
+        loop {
+            match self.reverse.pop_back() {
                 Some(Timestamped(time, delta)) => 
                     if time <= at {
-                        self.reverse.push(Timestamped(time, delta));
+                        self.reverse.push_back(Timestamped(time, delta));
                         break;
                     } else {
                         let new_delta = self.current.apply_reverse(delta);
@@ -46,7 +68,9 @@ impl <S, F, R, T> TimeMachine<S, F, R, T>
                 None => break
             }
         }
+    }
 
+    fn move_forward_to(&mut self, at: T) {
         loop {
             match self.forward.pop() {
                 Some(Timestamped(time, delta)) => 
@@ -55,7 +79,7 @@ impl <S, F, R, T> TimeMachine<S, F, R, T>
                         break;
                     } else {
                         let new_delta = self.current.apply_forward(delta);
-                        self.reverse.push(Timestamped(time, new_delta));
+                        self.reverse.push_back(Timestamped(time, new_delta));
                     },
                 None => break
             }
@@ -153,5 +177,20 @@ mod tests {
         m.change(TestTimeMachineDelta::Mul(2), 5);
         assert_eq!(TestTimeMachineState(16), *m.value_at(5));
         assert_eq!(TestTimeMachineState(21), *m.value_at(10));
+    }
+
+    #[test]
+    fn test_forget_ancient_history() {
+        let mut m = TestTimeMachine::new(TestTimeMachineState(5));
+        m.change(TestTimeMachineDelta::Add(3), 1);
+        m.change(TestTimeMachineDelta::Mul(2), 2);
+        m.change(TestTimeMachineDelta::Add(2), 3);
+        m.change(TestTimeMachineDelta::Sub(10), 4);
+        m.forget_ancient_history(3);
+
+        assert_eq!(TestTimeMachineState(16), *m.value_at(1));
+        assert_eq!(TestTimeMachineState(16), *m.value_at(2));
+        assert_eq!(TestTimeMachineState(18), *m.value_at(3));
+        assert_eq!(TestTimeMachineState(8), *m.value_at(4));
     }
 }
