@@ -13,7 +13,7 @@ pub struct TimeMachine<S, F, R, T> {
 
 impl <S, F, R, T> TimeMachine<S, F, R, T>
     where S: TimeMachineState<F, R>,
-          T:PartialOrd + Copy {
+          T: PartialOrd + Copy {
     pub fn new(initial: S) -> TimeMachine<S, F, R, T> {
         TimeMachine {
             current: initial,
