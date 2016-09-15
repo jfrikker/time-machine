@@ -2,8 +2,8 @@ use std::collections::vec_deque::VecDeque;
 use std::result as result;
 
 pub trait TimeMachineState<F, R> {
-    fn apply_forward(&mut self, delta: F) -> R;
-    fn apply_reverse(&mut self, delta: R) -> F;
+    fn apply_forward(&mut self, delta: &F) -> R;
+    fn apply_reverse(&mut self, delta: &R);
 }
 
 #[derive(Debug, PartialEq)]
@@ -17,7 +17,7 @@ struct Timestamped<T, D> (T, D);
 
 pub struct TimeMachine<S, F, R, T> {
     current: S,
-    reverse: VecDeque<Timestamped<T, R>>,
+    reverse: VecDeque<Timestamped<T, (F, R)>>,
     forward: Vec<Timestamped<T, F>>,
     oldest: Option<T>
 }
@@ -84,13 +84,13 @@ impl <S, F, R, T> TimeMachine<S, F, R, T>
     fn move_backward_to(&mut self, at: T) {
         loop {
             match self.reverse.pop_back() {
-                Some(Timestamped(time, delta)) => 
+                Some(Timestamped(time, (delta_f, delta_r))) => 
                     if time <= at {
-                        self.reverse.push_back(Timestamped(time, delta));
+                        self.reverse.push_back(Timestamped(time, (delta_f, delta_r)));
                         break;
                     } else {
-                        let new_delta = self.current.apply_reverse(delta);
-                        self.forward.push(Timestamped(time, new_delta));
+                        self.current.apply_reverse(&delta_r);
+                        self.forward.push(Timestamped(time, delta_f));
                     },
                 None => break
             }
@@ -105,8 +105,8 @@ impl <S, F, R, T> TimeMachine<S, F, R, T>
                         self.forward.push(Timestamped(time, delta));
                         break;
                     } else {
-                        let new_delta = self.current.apply_forward(delta);
-                        self.reverse.push_back(Timestamped(time, new_delta));
+                        let new_delta = self.current.apply_forward(&delta);
+                        self.reverse.push_back(Timestamped(time, (delta, new_delta)));
                     },
                 None => break
             }
@@ -129,8 +129,8 @@ mod tests {
     }
 
     impl TestTimeMachineState {
-        fn apply(&mut self, delta: TestTimeMachineDelta) -> TestTimeMachineDelta {
-            match delta {
+        fn apply(&mut self, delta: &TestTimeMachineDelta) -> TestTimeMachineDelta {
+            match *delta {
                 TestTimeMachineDelta::Add(i) => {
                     self.0 += i;
                     TestTimeMachineDelta::Sub(i)
@@ -152,12 +152,12 @@ mod tests {
     }
 
     impl TimeMachineState<TestTimeMachineDelta, TestTimeMachineDelta> for TestTimeMachineState {
-        fn apply_forward(&mut self, delta: TestTimeMachineDelta) -> TestTimeMachineDelta {
+        fn apply_forward(&mut self, delta: &TestTimeMachineDelta) -> TestTimeMachineDelta {
             self.apply(delta)
         }
 
-        fn apply_reverse(&mut self, delta: TestTimeMachineDelta) -> TestTimeMachineDelta {
-            self.apply(delta)
+        fn apply_reverse(&mut self, delta: &TestTimeMachineDelta) {
+            self.apply(delta);
         }
     }
 
