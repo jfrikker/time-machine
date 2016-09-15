@@ -1,16 +1,25 @@
 use std::collections::vec_deque::VecDeque;
+use std::result as result;
 
 pub trait TimeMachineState<F, R> {
     fn apply_forward(&mut self, delta: F) -> R;
     fn apply_reverse(&mut self, delta: R) -> F;
 }
 
+#[derive(Debug, PartialEq)]
+pub enum Error<T> {
+    TimeEvicted(T, T)
+}
+
+pub type Result<D, T> = result::Result<D, Error<T>>;
+
 struct Timestamped<T, D> (T, D);
 
 pub struct TimeMachine<S, F, R, T> {
     current: S,
     reverse: VecDeque<Timestamped<T, R>>,
-    forward: Vec<Timestamped<T, F>>
+    forward: Vec<Timestamped<T, F>>,
+    oldest: Option<T>
 }
 
 impl <S, F, R, T> TimeMachine<S, F, R, T>
@@ -20,18 +29,22 @@ impl <S, F, R, T> TimeMachine<S, F, R, T>
         TimeMachine {
             current: initial,
             reverse: VecDeque::new(),
-            forward: Vec::new()
+            forward: Vec::new(),
+            oldest: None
         }
     }
 
-    pub fn change(&mut self, delta: F, at: T) {
+    pub fn change(&mut self, delta: F, at: T) -> Result<(), T> {
+        try!(self.check_oldest(at));
         self.move_to(at);
         self.forward.push(Timestamped(at, delta));
+        Ok(())
     }
 
-    pub fn value_at(&mut self, at: T) -> &S {
+    pub fn value_at(&mut self, at: T) -> Result<&S, T> {
+        try!(self.check_oldest(at));
         self.move_to(at);
-        &self.current
+        Ok(&self.current)
     }
 
     pub fn forget_ancient_history(&mut self, until: T) {
@@ -46,6 +59,20 @@ impl <S, F, R, T> TimeMachine<S, F, R, T>
                     },
                 None => break
             }
+        }
+
+        self.oldest = Some(until);
+    }
+
+    fn check_oldest(&self, at: T) -> Result<(), T> {
+        match self.oldest {
+            Some(i) => 
+                if i > at {
+                    Err(Error::TimeEvicted(at, i))
+                } else {
+                    Ok(())
+                },
+            None => Ok(())
         }
     }
 
@@ -89,7 +116,7 @@ impl <S, F, R, T> TimeMachine<S, F, R, T>
 
 #[cfg(test)]
 mod tests {
-    use super::{TimeMachine, TimeMachineState};
+    use super::{Error, TimeMachine, TimeMachineState};
 
     #[derive(Debug, PartialEq)]
     struct TestTimeMachineState(i32);
@@ -136,61 +163,71 @@ mod tests {
 
     type TestTimeMachine = TimeMachine<TestTimeMachineState, TestTimeMachineDelta, TestTimeMachineDelta, u32>;
 
+    fn assert_machine_success(m: &mut TestTimeMachine, at: u32, expected: i32) {
+        let result = m.value_at(at).unwrap();
+        assert_eq!(&TestTimeMachineState(expected), result);
+    }
+
+    fn assert_machine_failure(m: &mut TestTimeMachine, at: u32, expected: Error<u32>) {
+        let result = m.value_at(at);
+        assert_eq!(Some(expected), result.err());
+    }
+
     #[test]
     fn forward_change() {
         let mut m = TestTimeMachine::new(TestTimeMachineState(5));
-        m.change(TestTimeMachineDelta::Add(3), 1);
-        assert_eq!(TestTimeMachineState(8), *m.value_at(1));
+        m.change(TestTimeMachineDelta::Add(3), 1).unwrap();
+        assert_machine_success(&mut m, 1, 8);
     }
 
     #[test]
     fn rewind() {
         let mut m = TestTimeMachine::new(TestTimeMachineState(5));
-        m.change(TestTimeMachineDelta::Add(3), 1);
-        assert_eq!(TestTimeMachineState(5), *m.value_at(0));
+        m.change(TestTimeMachineDelta::Add(3), 1).unwrap();
+        assert_machine_success(&mut m, 0, 5);
     }
 
     #[test]
     fn move_around() {
         let mut m = TestTimeMachine::new(TestTimeMachineState(5));
-        m.change(TestTimeMachineDelta::Add(3), 1);
-        m.change(TestTimeMachineDelta::Mul(4), 10);
-        m.change(TestTimeMachineDelta::Sub(2), 11);
-        m.change(TestTimeMachineDelta::Div(5), 20);
-        assert_eq!(TestTimeMachineState(6), *m.value_at(25));
-        assert_eq!(TestTimeMachineState(32), *m.value_at(10));
-        assert_eq!(TestTimeMachineState(5), *m.value_at(0));
-        assert_eq!(TestTimeMachineState(30), *m.value_at(15));
-        assert_eq!(TestTimeMachineState(30), *m.value_at(11));
-        assert_eq!(TestTimeMachineState(8), *m.value_at(8));
-        assert_eq!(TestTimeMachineState(8), *m.value_at(1));
+        m.change(TestTimeMachineDelta::Add(3), 1).unwrap();
+        m.change(TestTimeMachineDelta::Mul(4), 10).unwrap();
+        m.change(TestTimeMachineDelta::Sub(2), 11).unwrap();
+        m.change(TestTimeMachineDelta::Div(5), 20).unwrap();
+        assert_machine_success(&mut m, 25, 6);
+        assert_machine_success(&mut m, 10, 32);
+        assert_machine_success(&mut m, 0, 5);
+        assert_machine_success(&mut m, 15, 30);
+        assert_machine_success(&mut m, 11, 30);
+        assert_machine_success(&mut m, 8, 8);
+        assert_machine_success(&mut m, 1, 8);
     }
 
     #[test]
     fn change_in_middle() {
         let mut m = TestTimeMachine::new(TestTimeMachineState(5));
-        m.change(TestTimeMachineDelta::Add(3), 1);
-        m.change(TestTimeMachineDelta::Add(5), 10);
-        assert_eq!(TestTimeMachineState(8), *m.value_at(5));
-        assert_eq!(TestTimeMachineState(13), *m.value_at(10));
+        m.change(TestTimeMachineDelta::Add(3), 1).unwrap();
+        m.change(TestTimeMachineDelta::Add(5), 10).unwrap();
+        assert_machine_success(&mut m, 5, 8);
+        assert_machine_success(&mut m, 10, 13);
 
-        m.change(TestTimeMachineDelta::Mul(2), 5);
-        assert_eq!(TestTimeMachineState(16), *m.value_at(5));
-        assert_eq!(TestTimeMachineState(21), *m.value_at(10));
+        m.change(TestTimeMachineDelta::Mul(2), 5).unwrap();
+        assert_machine_success(&mut m, 5, 16);
+        assert_machine_success(&mut m, 10, 21);
     }
 
     #[test]
     fn test_forget_ancient_history() {
         let mut m = TestTimeMachine::new(TestTimeMachineState(5));
-        m.change(TestTimeMachineDelta::Add(3), 1);
-        m.change(TestTimeMachineDelta::Mul(2), 2);
-        m.change(TestTimeMachineDelta::Add(2), 3);
-        m.change(TestTimeMachineDelta::Sub(10), 4);
+        m.change(TestTimeMachineDelta::Add(3), 1).unwrap();
+        m.change(TestTimeMachineDelta::Mul(2), 2).unwrap();
+        m.change(TestTimeMachineDelta::Add(2), 3).unwrap();
+        m.change(TestTimeMachineDelta::Sub(10), 4).unwrap();
         m.forget_ancient_history(3);
 
-        assert_eq!(TestTimeMachineState(16), *m.value_at(1));
-        assert_eq!(TestTimeMachineState(16), *m.value_at(2));
-        assert_eq!(TestTimeMachineState(18), *m.value_at(3));
-        assert_eq!(TestTimeMachineState(8), *m.value_at(4));
+        assert_machine_failure(&mut m, 1, Error::TimeEvicted(1, 3));
+        assert_machine_failure(&mut m, 2, Error::TimeEvicted(2, 3));
+        assert_machine_success(&mut m, 3, 18);
+        assert_machine_success(&mut m, 4, 8);
     }
 }
