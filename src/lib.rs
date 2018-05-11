@@ -1,9 +1,12 @@
 use std::collections::vec_deque::VecDeque;
 use std::result as result;
 
-pub trait TimeMachineState<F, R> {
-    fn apply_forward(&mut self, delta: &F) -> R;
-    fn apply_reverse(&mut self, delta: &R);
+pub trait TimeMachineState {
+    type Forward;
+    type Reverse;
+
+    fn apply_forward(&mut self, delta: &Self::Forward) -> Self::Reverse;
+    fn apply_reverse(&mut self, delta: &Self::Reverse);
 }
 
 #[derive(Debug, PartialEq)]
@@ -15,17 +18,18 @@ pub type Result<D, T> = result::Result<D, Error<T>>;
 
 struct Timestamped<T, D> (T, D);
 
-pub struct TimeMachine<S, F, R, T> {
+pub struct TimeMachine<S, T>
+    where S: TimeMachineState {
     current: S,
-    reverse: VecDeque<Timestamped<T, (F, R)>>,
-    forward: Vec<Timestamped<T, F>>,
+    reverse: VecDeque<Timestamped<T, (S::Forward, S::Reverse)>>,
+    forward: Vec<Timestamped<T, S::Forward>>,
     oldest: Option<T>
 }
 
-impl <S, F, R, T> TimeMachine<S, F, R, T>
-    where S: TimeMachineState<F, R>,
+impl <S, T> TimeMachine<S, T>
+    where S: TimeMachineState,
           T: PartialOrd + Copy {
-    pub fn new(initial: S) -> TimeMachine<S, F, R, T> {
+    pub fn new(initial: S) -> TimeMachine<S, T> {
         TimeMachine {
             current: initial,
             reverse: VecDeque::new(),
@@ -34,7 +38,7 @@ impl <S, F, R, T> TimeMachine<S, F, R, T>
         }
     }
 
-    pub fn change(&mut self, delta: F, at: T) -> Result<(), T> {
+    pub fn change(&mut self, delta: S::Forward, at: T) -> Result<(), T> {
         try!(self.check_oldest(at));
         self.move_to(at);
         self.forward.push(Timestamped(at, delta));
@@ -151,7 +155,10 @@ mod tests {
         }
     }
 
-    impl TimeMachineState<TestTimeMachineDelta, TestTimeMachineDelta> for TestTimeMachineState {
+    impl TimeMachineState for TestTimeMachineState {
+        type Forward = TestTimeMachineDelta;
+        type Reverse = TestTimeMachineDelta;
+
         fn apply_forward(&mut self, delta: &TestTimeMachineDelta) -> TestTimeMachineDelta {
             self.apply(delta)
         }
@@ -161,7 +168,7 @@ mod tests {
         }
     }
 
-    type TestTimeMachine = TimeMachine<TestTimeMachineState, TestTimeMachineDelta, TestTimeMachineDelta, u32>;
+    type TestTimeMachine = TimeMachine<TestTimeMachineState, u32>;
 
     fn assert_machine_success(m: &mut TestTimeMachine, at: u32, expected: i32) {
         let result = m.value_at(at).unwrap();
